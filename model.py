@@ -57,7 +57,7 @@ class StoDepth_BasicBlock(nn.Module):
         batch_size = x.shape[0]
 
         if self.training:
-            sample = self.m.sample(sample_shape=torch.Size([batch_size, 1, 1])).to(x.device)
+            sample = self.m.sample(sample_shape=(batch_size, 1, 1)).to(x.device)
             sample.requires_grad = False
             residual = residual.mul(sample)
 
