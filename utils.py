@@ -36,10 +36,12 @@ def train_model(
     log_path=None,
     epochs=100,
     onehot=True,
+    mixup=False,
+    mixup_alpha=1.0,
 ):
     start_time = time.time()
 
-    if onehot:
+    if onehot or mixup:
         criterion = lambda output, target: torch.mean(
             torch.sum(-target * F.log_softmax(output, dim=1), dim=1)
         )
@@ -58,6 +60,7 @@ def train_model(
             os.mkdir(dirname)
     
     logs = []
+    best_validation_acc = 0.0
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -66,10 +69,14 @@ def train_model(
         train_correct = 0
         train_total = 0
 
-        best_validation_acc = 0.0
-
         for batch in dataloader_train:
-            data, target = batch[0].to(device), batch[1].to(device)
+            data, target = batch[0], batch[1]
+            if mixup:
+                if not onehot:
+                    target = to_onehot(target)
+                data, target = mixup_batch(data, target, alpha=mixup_alpha)
+
+            data, target = data.to(device), target.to(device)
 
             output = model(data)
             loss = criterion(output, target)
@@ -97,15 +104,16 @@ def train_model(
         hour, rem = divmod(passed_time, 3600)
         minute, second = divmod(rem, 60)
         
-        print("Epoch {:0>3}/{:0>3}: train loss = {:.4f}, acc = {:.4f}, val loss = {:.4f}, acc = {:.4f} ({:0>2}:{:0>2}:{:05.2f} passed)".format(
-            epoch,
-            epochs,
-            round(train_loss, 4),
-            round(train_acc, 4),
-            round(validation_loss, 4),
-            round(validation_acc, 4),
-            int(hour), int(minute), second
-        ))
+        print("Epoch {:0>3}/{:0>3}: train loss = {:.4f}, acc = {:.4f}, val loss = {:.4f}, acc = {:.4f} ({:0>2}:{:0>2}:{:05.2f})"
+            .format(
+                epoch,
+                epochs,
+                train_loss,
+                train_acc,
+                validation_loss,
+                validation_acc,
+                int(hour), int(minute), second
+            ))
 
         if validation_acc > best_validation_acc:
             best_validation_acc = validation_acc
@@ -201,7 +209,7 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
         confidence_threshold=0.5,
         generated_batch_size=128,
     ):
-        assert label_type == "hard" or label_type == "soft" or label_type == "smooth"
+        assert label_type in ["hard", "soft", "smooth"]
         super(DatasetFromTeacher, self).__init__()
         self.label_type = label_type
         self.transform_test = transform_test
@@ -222,14 +230,14 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
                 label = np.zeros(num_classes)
                 label[y] = 1.0
                 self.label.append(label)
-            else:
+            elif label_type == "smooth":
                 label = np.full(num_classes, self.smoothing_small)
                 label[y] = self.smoothing_big
                 self.label.append(label)
 
         teacher_model.eval()
         generated_batch = []
-        for image, orig_label in dataset_unlabeled:
+        for image, _ in dataset_unlabeled:
             generated_batch.append(image)
             if len(generated_batch) == generated_batch_size:
                 self._add_label_from_generated_batch(teacher_model, generated_batch)
@@ -267,7 +275,7 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
         elif self.label_type == "soft":
             # do nothing on the softmax label
             pass
-        else:
+        elif self.label_type == "smooth":
             mxindex = labels.argmax(axis=1)
             labels = np.full((n, self.num_classes), self.smoothing_small)
             labels[np.arange(n), mxindex] = self.smoothing_big
@@ -287,3 +295,26 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
             self.transform_noisy(self.data[index]),
             self.label[index],
         )
+
+
+def to_onehot(label, num_classes=10):
+    return torch.eye(num_classes)[label]
+
+
+def mixup_batch(data, label, alpha=1.0):
+    batch_size = data.shape[0]
+
+    if alpha > 0:
+        beta = torch.distributions.beta.Beta(alpha, alpha)
+        lam = beta.sample(sample_shape=(batch_size,))
+    else:
+        lam = 1
+    
+    index = torch.randperm(batch_size)
+
+    lam_data, lam_label = lam.view(batch_size, 1, 1, 1), lam.view(batch_size, 1)
+
+    mixup_data = lam_data * data + (1 - lam_data) * data[index, :]
+    mixup_label = lam_label * label + (1 - lam_label) * label[index, :]
+
+    return mixup_data, mixup_label
