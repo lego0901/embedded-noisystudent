@@ -33,7 +33,7 @@ parser.add_argument("--stochastic_depth_L_prob", default=0.8, help="stochastic d
 parser.add_argument("--dropout_prob", default=0.5, help="dropout probability for fc", type=float)
 parser.add_argument("--device", default="auto", help="device to run the model", type=str)
 parser.add_argument("--label_type", default="hard", help="label type for teacher generated dataset", type=str)
-parser.add_argument("--label_smoothing_epsilon", default=0.2, help="for epsilon value of label smoothing", type=float)
+parser.add_argument("--label_smoothing_epsilon", default=0.1, help="for epsilon value of label smoothing", type=float)
 parser.add_argument("--confidence_threshold", default=0.8, help="minimum confidence level of unlabeled data from the teacher model", type=float)
 parser.add_argument("--num_labeled", default=5000, help="number of labeled data", type=int)
 parser.add_argument("--num_validation", default=5000, help="number of validation data", type=float)
