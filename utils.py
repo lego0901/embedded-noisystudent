@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch.optim.optimizer import Optimizer, required
+
 import numpy as np
 from PIL import Image
 import pandas as pd
@@ -16,9 +18,10 @@ import torch.utils.data
 from model import StoDepth_ResNet
 
 
-def make_model(num_layers=20, prob_0_L=(1, 0.8), dropout_prob=0.5, num_classes=10):
+def make_model(num_layers=20, width=1, prob_0_L=(1, 0.8), dropout_prob=0.5, num_classes=10):
     return StoDepth_ResNet(
         num_layers,
+        width=width,
         prob_0_L=prob_0_L,
         dropout_prob=dropout_prob,
         num_classes=num_classes,
@@ -28,7 +31,7 @@ def make_model(num_layers=20, prob_0_L=(1, 0.8), dropout_prob=0.5, num_classes=1
 def train_model(
     model,
     dataloader_train,
-    dataloader_validation,
+    dataloader_test,
     device,
     optimizer,
     lr_scheduler=None,
@@ -60,7 +63,8 @@ def train_model(
             os.mkdir(dirname)
     
     logs = []
-    best_validation_acc = 0.0
+    best_test_acc = 0.0
+    train_dataset_len = len(dataloader_train.dataset)
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -69,8 +73,7 @@ def train_model(
         train_correct = 0
         train_total = 0
 
-        for batch in dataloader_train:
-            data, target = batch[0], batch[1]
+        for data, target in dataloader_train:
             if mixup:
                 if not onehot:
                     target = to_onehot(target)
@@ -89,12 +92,27 @@ def train_model(
             _, predicted = output.max(1)
             train_total += target.size(0)
             train_correct += predicted.eq(to_target(target)).sum().item()
+        
+            passed_time = time.time() - start_time
+            hour, rem = divmod(passed_time, 3600)
+            minute, second = divmod(rem, 60)
+
+            print("Epoch {:0>3}/{:0>3}: ({:0>5}/{:0>5}) train loss = {:.4f}, acc = {:.4f} ({:0>2}:{:0>2}:{:05.2f})\r"
+                .format(
+                    epoch,
+                    epochs,
+                    train_total,
+                    train_dataset_len,
+                    train_loss / train_total,
+                    train_correct / train_total,
+                    int(hour), int(minute), second
+                ), end="")
 
         train_loss /= train_total
         train_acc = train_correct / train_total
 
-        validation_loss, validation_acc = test_model(
-            model, dataloader_validation, device, True, onehot=False
+        test_loss, test_acc = test_model(
+            model, dataloader_test, device, onehot=False
         )
 
         if lr_scheduler is not None:
@@ -103,35 +121,35 @@ def train_model(
         passed_time = time.time() - start_time
         hour, rem = divmod(passed_time, 3600)
         minute, second = divmod(rem, 60)
-        
-        print("Epoch {:0>3}/{:0>3}: train loss = {:.4f}, acc = {:.4f}, val loss = {:.4f}, acc = {:.4f} ({:0>2}:{:0>2}:{:05.2f})"
+
+        print("Epoch {:0>3}/{:0>3}: train loss = {:.4f}, acc = {:.4f}, test loss = {:.4f}, acc = {:.4f} ({:0>2}:{:0>2}:{:05.2f})"
             .format(
                 epoch,
                 epochs,
                 train_loss,
                 train_acc,
-                validation_loss,
-                validation_acc,
+                test_loss,
+                test_acc,
                 int(hour), int(minute), second
             ))
 
-        if validation_acc > best_validation_acc:
-            best_validation_acc = validation_acc
+        if test_acc > best_test_acc:
+            best_test_acc = test_acc
             if save_path is not None:
                 torch.save(model.state_dict(), save_path)
         
-        logs.append((train_loss, train_acc, validation_loss, validation_acc))
+        logs.append((train_loss, train_acc, test_loss, test_acc))
 
         if log_path is not None:
             df = pd.DataFrame(
                 logs,
-                columns=["train_loss", "train_acc", "validation_loss", "validation_acc"],
+                columns=["train_loss", "train_acc", "test_loss", "test_acc"],
                 index=range(1, epoch + 1)
             )
             df.to_csv(log_path, encoding="UTF-8")
 
 
-def test_model(model, dataloader_test, device, validation=True, onehot=False):
+def test_model(model, dataloader_test, device, onehot=False):
     if onehot:
         criterion = lambda output, target: torch.mean(
             torch.sum(-target * F.log_softmax(output, dim=1), dim=1)
@@ -205,8 +223,8 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
         device,
         num_classes=10,
         label_type="hard",
-        label_smoothing_epsilon=0.2,
-        confidence_threshold=0.5,
+        label_smoothing_epsilon=0.1,
+        confidence_threshold=0.8,
         generated_batch_size=128,
     ):
         assert label_type in ["hard", "soft", "smooth"]
@@ -318,3 +336,70 @@ def mixup_batch(data, label, alpha=1.0):
     mixup_label = lam_label * label + (1 - lam_label) * label[index, :]
 
     return mixup_data, mixup_label
+
+
+class SGD_with_lars(Optimizer):
+    """Implements stochastic gradient descent (optionally with momentum)."""
+
+    def __init__(self, params, lr=required, momentum=0, weight_decay=0, trust_coef=1.): # need to add trust coef
+        if lr is not required and lr < 0.0:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+        if momentum < 0.0:
+            raise ValueError("Invalid momentum value: {}".format(momentum))
+        if weight_decay < 0.0:
+            raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
+        if trust_coef < 0.0:
+            raise ValueError("Invalid trust_coef value: {}".format(trust_coef))
+
+        defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, trust_coef=trust_coef)
+
+        super(SGD_with_lars, self).__init__(params, defaults)
+
+    def __setstate__(self, state):
+        super(SGD_with_lars, self).__setstate__(state)
+
+    def step(self, closure=None):
+        """Performs a single optimization step.
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            weight_decay = group['weight_decay']
+            momentum = group['momentum']
+            trust_coef = group['trust_coef']
+            global_lr = group['lr']
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                d_p = p.grad.data
+
+                p_norm = torch.norm(p.data, p=2)
+                d_p_norm = torch.norm(d_p, p=2).add_(momentum, p_norm)
+                lr = torch.div(p_norm, d_p_norm).mul_(trust_coef)
+
+                lr.mul_(global_lr)
+
+                if weight_decay != 0:
+                    d_p.add_(weight_decay, p.data)
+
+                d_p.mul_(lr)
+
+                if momentum != 0:
+                    param_state = self.state[p]
+                    if 'momentum_buffer' not in param_state:
+                        buf = param_state['momentum_buffer'] = torch.clone(d_p).detach()
+                    else:
+                        buf = param_state['momentum_buffer']
+                        buf.mul_(momentum).add_(d_p)
+                    d_p = buf
+
+                p.data.add_(-1, d_p)
+
+        return loss
+
