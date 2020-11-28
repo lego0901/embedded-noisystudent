@@ -17,13 +17,14 @@ from utils import *
 from math import ceil
 
 import argparse
+import json
 
 
 """ Basic preparation """
 parser = argparse.ArgumentParser(description="CIFAR10 noisy student ST model")
-parser.add_argument("--lr", default=0.2, help="learning rate for training step", type=float)
+parser.add_argument("--lr", default=0.1, help="learning rate for training step", type=float)
 parser.add_argument("--momentum", default=0.9, help="factor for training step", type=float)
-parser.add_argument("--weight_decay", default=1e-5, help="factor for training step", type=float)
+parser.add_argument("--weight_decay", default=1e-4, help="factor for training step", type=float)
 parser.add_argument("--batch_size", default=512, help="batch size for training", type=int)
 parser.add_argument("--batch_size_test", default=512, help="batch size for testing", type=int)
 parser.add_argument("--num_workers", default=4, help="number of cpu workers", type=int)
@@ -34,14 +35,15 @@ parser.add_argument("--stochastic_depth_0_prob", default=1.0, help="stochastic d
 parser.add_argument("--stochastic_depth_L_prob", default=0.8, help="stochastic depth prob of the final resnet layer", type=float)
 parser.add_argument("--dropout_prob", default=0.2, help="dropout probability for fc", type=float)
 parser.add_argument("--device", default="auto", help="device to run the model", type=str)
+parser.add_argument("--ratio_labeled", default=0.1, help="ratio of labeled training data", type=float)
 parser.add_argument("--label_type", default="hard", help="label type for teacher generated dataset", type=str)
 parser.add_argument("--label_smoothing_epsilon", default=0.1, help="for epsilon value of label smoothing", type=float)
 parser.add_argument("--confidence_threshold", default=0.8, help="minimum confidence level of unlabeled data from the teacher model", type=float)
-parser.add_argument("--ratio_labeled", default=0.1, help="ratio of labeled training data", type=float)
+parser.add_argument("--min_images_per_class", default=4000, help="minimum number of images per each class when generating dataset", type=int)
 parser.add_argument("--teacher", default=None, help="load pretrained teacher model")
 parser.add_argument("--teacher_layer", default=20, help="teacher initial layer", type=int)
 parser.add_argument("--teacher_width", default=1, help="resnet width of teacher model", type=int)
-parser.add_argument("--teacher_num_learning_images", default=8000000, help="the number of images required to train teacher", type=int)
+parser.add_argument("--teacher_num_learning_images", default=5000000, help="the number of images required to train teacher", type=int)
 parser.add_argument("--student_layer", default=38, help="final student layer number", type=int)
 parser.add_argument("--student_width", default=1, help="resnet width of student model", type=int)
 parser.add_argument("--student_num_learning_images", default=10000000, help="the number of images required to train student", type=int)
@@ -51,7 +53,6 @@ parser.add_argument("--mixup_alpha", default=1.0, help="alpha for beta distrubut
 parser.add_argument("--only_train_teacher", default=False, help="only trains the teacher model w/o ST", type=bool)
 
 args = parser.parse_args()
-print(args)
 
 if args.device == "auto":
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -75,6 +76,9 @@ else:
         print("! Warning: path {} already exists".format(log_path))
     else:
         os.mkdir(log_path)
+
+with open(os.path.join(log_path, "config.json"), "wt") as f:
+    json.dump(vars(args), f, indent=4)
 
 
 """ Datasets Setting """
@@ -135,14 +139,10 @@ dataloader_test = DataLoader(
 teacher_model = make_model(
     args.teacher_layer,
     width=args.teacher_width,
-    #prob_0_L=(args.stochastic_depth_0_prob, args.stochastic_depth_L_prob),
     prob_0_L=(1.0, 1.0),
-    #dropout_prob=args.dropout_prob,
     dropout_prob=0.0,
     num_classes=10,
 ).to(device)
-
-#print(teacher_model)
 
 if args.teacher is None:
     print("Creating and begining to train the teacher model with resnet {}".format(args.teacher_layer))
@@ -172,8 +172,8 @@ if args.teacher is None:
     )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
-        milestones=[int(0.5 * teacher_epochs), int(0.75 * teacher_epochs), int(0.9 * teacher_epochs)],
-        gamma=0.05,
+        milestones=[int(0.5 * teacher_epochs), int(0.75 * teacher_epochs)],
+        gamma=0.1,
     )
     
     teacher_save_path = os.path.join(log_path, "model/teacher_resnet{}.pth".format(args.teacher_layer))
@@ -222,6 +222,7 @@ while student_layer <= args.student_layer:
         label_type=args.label_type,
         label_smoothing_epsilon=args.label_smoothing_epsilon,
         confidence_threshold=args.confidence_threshold,
+        min_images_per_class=args.min_images_per_class,
     )
     print("Generated {} datasets with the confidence threshold {}"
         .format(len(dataset_train_student), args.confidence_threshold))
@@ -258,8 +259,8 @@ while student_layer <= args.student_layer:
     )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
-        milestones=[int(0.5 * student_epochs), int(0.75 * student_epochs), int(0.9 * student_epochs)],
-        gamma=0.05,
+        milestones=[int(0.5 * teacher_epochs), int(0.75 * teacher_epochs)],
+        gamma=0.1,
     )
 
     student_save_path = os.path.join(log_path, "model/student_resnet{}.pth".format(student_layer))
