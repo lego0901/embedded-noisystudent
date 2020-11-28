@@ -259,7 +259,7 @@ while student_layer <= args.student_layer:
     )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
-        milestones=[int(0.5 * teacher_epochs), int(0.75 * teacher_epochs)],
+        milestones=[int(0.5 * student_epochs), int(0.75 * student_epochs)],
         gamma=0.1,
     )
 
