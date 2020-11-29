@@ -24,6 +24,10 @@ parser.add_argument("--batch_size_test", default=512, help="batch size for testi
 parser.add_argument("--num_workers", default=4, help="number of cpu workers", type=int)
 parser.add_argument("--model", default=None, help="load pretrained model")
 parser.add_argument("--model_layer", default=-1, help="number of layer of pretrained model", type=int)
+parser.add_argument("--model_width", default=1, help="resnet width of model", type=int)
+parser.add_argument("--stochastic_depth_0_prob", default=1.0, help="stochastic depth prob of the first resnet layer", type=float)
+parser.add_argument("--stochastic_depth_L_prob", default=0.8, help="stochastic depth prob of the final resnet layer", type=float)
+parser.add_argument("--dropout_prob", default=0.5, help="dropout probability for fc", type=float)
 parser.add_argument("--device", default="auto", help="device to run the model", type=str)
 
 args = parser.parse_args()
@@ -61,18 +65,32 @@ dataloader_test = DataLoader(
 )
 
 
-""" Teacher model preparation """
-model = make_model(
-    args.model_layer,
-    num_classes=10,
-).to(device)
-
+""" Test model preparation """
 print("Loading model from {}".format(args.model))
+if args.model.find("model/student_resnet") != -1:
+    # from another noisy student: add model noise
+    model = make_model(
+        args.model_layer,
+        width=args.model_width,
+        prob_0_L=(args.stochastic_depth_0_prob, args.stochastic_depth_L_prob),
+        dropout_prob=args.dropout_prob,
+        num_classes=10,
+    ).to(device)
+else:
+    # from pure teacher model: no model noise
+    model = make_model(
+        args.model_layer,
+        width=args.model_width,
+        prob_0_L=(1.0, 1.0),
+        dropout_prob=0.0,
+        num_classes=10,
+    ).to(device)
+
 model.load_state_dict(torch.load(args.model))
 
 model.eval()
 test_loss, test_acc = test_model(model, dataloader_test, device, onehot=False)
-print("Test loss and accuarcy for the teacher: {}, {}"
+print("Test loss and accuarcy for the model: {}, {}"
     .format(round(test_loss, 4), round(test_acc, 4)))
 
 # TODO: add several tests related to the model
