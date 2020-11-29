@@ -221,38 +221,41 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
         transform_test,
         transform_noisy,
         device,
+        args,
         num_classes=10,
-        label_type="hard",
-        label_smoothing_epsilon=0.1,
-        confidence_threshold=0.8,
         generated_batch_size=128,
     ):
-        assert label_type in ["hard", "soft", "smooth"]
+        assert args.label_type in ["hard", "soft", "smooth"]
         super(DatasetFromTeacher, self).__init__()
-        self.label_type = label_type
         self.transform_test = transform_test
         self.transform_noisy = transform_noisy
         self.data, self.label = [], []
         self.device = device
         self.num_classes = num_classes
-        self.confidence_threshold = confidence_threshold
+        self.args = args
 
         self.smoothing_big, self.smoothing_small = (
-            1 - label_smoothing_epsilon,
-            label_smoothing_epsilon / (num_classes - 1),
+            1 - args.label_smoothing_epsilon,
+            args.label_smoothing_epsilon / (num_classes - 1),
         )
 
-        for image, y in dataset_labeled:
-            self.data.append(np.array(transforms.ToPILImage()(image)))
-            if label_type == "hard" or label_type == "soft":
-                label = np.zeros(num_classes)
-                label[y] = 1.0
-                self.label.append(label)
-            elif label_type == "smooth":
-                label = np.full(num_classes, self.smoothing_small)
-                label[y] = self.smoothing_big
-                self.label.append(label)
+        self.images_per_class, self.onehot_labels_per_class = {}, {}
+        for y in range(num_classes):
+            self.images_per_class[y], self.onehot_labels_per_class[y] = [], []
 
+        # add labeled image
+        for image, y in dataset_labeled:
+            if args.label_type == "hard" or args.label_type == "soft":
+                onehot_label = np.zeros(num_classes)
+                onehot_label[y] = 1.0
+            elif args.label_type == "smooth":
+                onehot_label = np.full(num_classes, self.smoothing_small)
+                onehot_label[y] = self.smoothing_big
+
+            self.images_per_class[y].append(np.array(transforms.ToPILImage()(image)))
+            self.onehot_labels_per_class[y].append(onehot_label)
+
+        # add unlabeled image with pseudo-labels from the teacher model
         teacher_model.eval()
         generated_batch = []
         for image, _ in dataset_unlabeled:
@@ -264,46 +267,99 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
         if len(generated_batch) > 0:
             self._add_label_from_generated_batch(teacher_model, generated_batch)
             generated_batch = []
+        
+        # to make collected data into numpy array
+        for y in range(num_classes):
+            self.images_per_class[y] = np.array(self.images_per_class[y])
+            self.onehot_labels_per_class[y] = np.array(self.onehot_labels_per_class[y])
 
-        self.data, self.label = np.array(self.data), np.array(self.label)
+        # dataset generation
+        for y in range(num_classes):
+            self.data.append(self.images_per_class[y])
+            self.label.append(self.onehot_labels_per_class[y])
+
+        self.data, self.label = np.concatenate(self.data), np.concatenate(self.label)
 
     def _add_label_from_generated_batch(self, teacher_model, generated_batch):
-        input_batch = [self.transform_test(b).unsqueeze(0) for b in generated_batch]
-        input_batch = torch.Tensor(torch.cat(input_batch)).to(self.device)
-
-        generated_batch = np.array(
+        images = np.array(
             [np.array(transforms.ToPILImage()(b)) for b in generated_batch]
         )
 
+        input_batch = [self.transform_test(b).unsqueeze(0) for b in generated_batch]
+        input_batch = torch.Tensor(torch.cat(input_batch)).to(self.device)
+
         with torch.no_grad():
             teacher_model.eval()
-            labels = torch.softmax(teacher_model(input_batch), dim=1).cpu().numpy()
+            probs = torch.softmax(teacher_model(input_batch), dim=1).cpu().numpy()
 
-        survival_indices = labels.max(axis=1) > self.confidence_threshold
+        confidences = probs.max(axis=1)
+        survival_indices = confidences > self.args.confidence_threshold
 
-        labels = labels[survival_indices, :]
-        generated_batch = generated_batch[survival_indices, :, :]
+        probs = probs[survival_indices, :]
+        images = images[survival_indices, :, :, :]
 
-        n = len(labels)
+        n = len(probs)
 
-        if self.label_type == "hard":
-            mxindex = labels.argmax(axis=1)
-            labels = np.zeros((n, self.num_classes))
-            labels[np.arange(n), mxindex] = 1.0
-        elif self.label_type == "soft":
-            # do nothing on the softmax label
-            pass
-        elif self.label_type == "smooth":
-            mxindex = labels.argmax(axis=1)
-            labels = np.full((n, self.num_classes), self.smoothing_small)
-            labels[np.arange(n), mxindex] = self.smoothing_big
+        # why 0.99? to make confidence priority to the labeled one
+        if self.args.label_type == "hard":
+            mxindex = probs.argmax(axis=1)
+            onehot_labels = np.zeros((n, self.num_classes))
+            onehot_labels[np.arange(n), mxindex] = 0.99
+        elif self.args.label_type == "soft":
+            onehot_labels = np.minimum(probs, 0.99)
+        elif self.args.label_type == "smooth":
+            mxindex = probs.argmax(axis=1)
+            onehot_labels = np.full((n, self.num_classes), self.smoothing_small)
+            onehot_labels[np.arange(n), mxindex] = self.smoothing_big
 
-        for image, label in zip(generated_batch, labels):
-            self.data.append(image)
-            self.label.append(label)
+        for image, onehot_label in zip(images, onehot_labels):
+            y = onehot_label.argmax().item()
+            self.images_per_class[y].append(image)
+            self.onehot_labels_per_class[y].append(onehot_label)
+    
+    def num_images_per_label(self):
+        return [len(self.images_per_class[i]) for i in range(self.num_classes)]
 
-        del generated_batch
-        del labels
+    def balance_data(self, min_images_per_class=4000, max_gap_num_images_between_classes=1000):
+        # all classes will have >= min_images_per_classes images
+        min_num_images = 1e9
+        for y in range(self.num_classes):
+            n = len(self.images_per_class[y])
+            while n < min_images_per_class:
+                k = min(n, min_images_per_class - n)
+
+                confidences = self.onehot_labels_per_class[y].max(axis=1)
+                add_indices = (-confidences).argsort()[:k]
+                images, labels = list(self.images_per_class[y]), list(self.onehot_labels_per_class[y])
+                for idx in add_indices:
+                    images.append(self.images_per_class[y][idx])
+                    labels.append(self.onehot_labels_per_class[y][idx])
+
+                self.images_per_class[y] = np.array(images)
+                self.onehot_labels_per_class[y] = np.array(labels)
+                n += k
+
+            min_num_images = min(min_num_images, n)
+
+        # all classes will have <= min_num_images + max_gap_num_images_between_classes images
+        max_allowed_num_images = min_num_images + max_gap_num_images_between_classes
+        for y in range(self.num_classes):
+            n = len(self.images_per_class[y])
+            if n > max_allowed_num_images:
+                confidences = self.onehot_labels_per_class[y].max(axis=1)
+                survived_indices = (-confidences).argsort()[:max_allowed_num_images]
+                self.images_per_class[y] = self.images_per_class[y][survived_indices]
+                self.onehot_labels_per_class[y] = self.onehot_labels_per_class[y][survived_indices]
+        
+        # dataset generation
+        self.data = []
+        self.label = []
+
+        for y in range(self.num_classes):
+            self.data.append(self.images_per_class[y])
+            self.label.append(self.onehot_labels_per_class[y])
+
+        self.data, self.label = np.concatenate(self.data), np.concatenate(self.label)
 
     def __len__(self):
         return len(self.data)
@@ -336,70 +392,3 @@ def mixup_batch(data, label, alpha=1.0):
     mixup_label = lam_label * label + (1 - lam_label) * label[index, :]
 
     return mixup_data, mixup_label
-
-
-class SGD_with_lars(Optimizer):
-    """Implements stochastic gradient descent (optionally with momentum)."""
-
-    def __init__(self, params, lr=required, momentum=0, weight_decay=0, trust_coef=1.): # need to add trust coef
-        if lr is not required and lr < 0.0:
-            raise ValueError("Invalid learning rate: {}".format(lr))
-        if momentum < 0.0:
-            raise ValueError("Invalid momentum value: {}".format(momentum))
-        if weight_decay < 0.0:
-            raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
-        if trust_coef < 0.0:
-            raise ValueError("Invalid trust_coef value: {}".format(trust_coef))
-
-        defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, trust_coef=trust_coef)
-
-        super(SGD_with_lars, self).__init__(params, defaults)
-
-    def __setstate__(self, state):
-        super(SGD_with_lars, self).__setstate__(state)
-
-    def step(self, closure=None):
-        """Performs a single optimization step.
-        Arguments:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
-        """
-        loss = None
-        if closure is not None:
-            loss = closure()
-
-        for group in self.param_groups:
-            weight_decay = group['weight_decay']
-            momentum = group['momentum']
-            trust_coef = group['trust_coef']
-            global_lr = group['lr']
-
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                d_p = p.grad.data
-
-                p_norm = torch.norm(p.data, p=2)
-                d_p_norm = torch.norm(d_p, p=2).add_(momentum, p_norm)
-                lr = torch.div(p_norm, d_p_norm).mul_(trust_coef)
-
-                lr.mul_(global_lr)
-
-                if weight_decay != 0:
-                    d_p.add_(weight_decay, p.data)
-
-                d_p.mul_(lr)
-
-                if momentum != 0:
-                    param_state = self.state[p]
-                    if 'momentum_buffer' not in param_state:
-                        buf = param_state['momentum_buffer'] = torch.clone(d_p).detach()
-                    else:
-                        buf = param_state['momentum_buffer']
-                        buf.mul_(momentum).add_(d_p)
-                    d_p = buf
-
-                p.data.add_(-1, d_p)
-
-        return loss
-

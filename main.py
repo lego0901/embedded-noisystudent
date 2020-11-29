@@ -33,20 +33,21 @@ parser.add_argument("--randaugment_magnitude", default=27, help="magnitude of ra
 parser.add_argument("--no_randaugment", default=False, help="to use randaugment or not", type=bool)
 parser.add_argument("--stochastic_depth_0_prob", default=1.0, help="stochastic depth prob of the first resnet layer", type=float)
 parser.add_argument("--stochastic_depth_L_prob", default=0.8, help="stochastic depth prob of the final resnet layer", type=float)
-parser.add_argument("--dropout_prob", default=0.2, help="dropout probability for fc", type=float)
+parser.add_argument("--dropout_prob", default=0.5, help="dropout probability for fc", type=float)
 parser.add_argument("--device", default="auto", help="device to run the model", type=str)
 parser.add_argument("--ratio_labeled", default=0.1, help="ratio of labeled training data", type=float)
 parser.add_argument("--label_type", default="hard", help="label type for teacher generated dataset", type=str)
 parser.add_argument("--label_smoothing_epsilon", default=0.1, help="for epsilon value of label smoothing", type=float)
 parser.add_argument("--confidence_threshold", default=0.8, help="minimum confidence level of unlabeled data from the teacher model", type=float)
 parser.add_argument("--min_images_per_class", default=4000, help="minimum number of images per each class when generating dataset", type=int)
+parser.add_argument("--max_gap_num_images_between_classes", default=1000, help="maximum allowed gap among the number of images per class", type=int)
 parser.add_argument("--teacher", default=None, help="load pretrained teacher model")
 parser.add_argument("--teacher_layer", default=20, help="teacher initial layer", type=int)
 parser.add_argument("--teacher_width", default=1, help="resnet width of teacher model", type=int)
 parser.add_argument("--teacher_num_learning_images", default=5000000, help="the number of images required to train teacher", type=int)
 parser.add_argument("--student_layer", default=38, help="final student layer number", type=int)
 parser.add_argument("--student_width", default=1, help="resnet width of student model", type=int)
-parser.add_argument("--student_num_learning_images", default=10000000, help="the number of images required to train student", type=int)
+parser.add_argument("--student_num_learning_images", default=15000000, help="the number of images required to train student", type=int)
 parser.add_argument("--teacher_mixup", default=False, help="apply mixup for teacher model", type=bool)
 parser.add_argument("--student_mixup", default=False, help="apply mixup for teacher model", type=bool)
 parser.add_argument("--mixup_alpha", default=1.0, help="alpha for beta distrubution of mixup", type=float)
@@ -84,7 +85,7 @@ with open(os.path.join(log_path, "config.json"), "wt") as f:
 """ Datasets Setting """
 labels = ("airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck")
 
-cifar10_mean, cifar10_std = (0.4913, 0.4821, 0.4465), (0.2470, 0.2434, 0.2615)
+cifar10_mean, cifar10_std = [0.4913, 0.4821, 0.4465], [0.2470, 0.2434, 0.2615]
 
 transform_common = transforms.ToTensor()
 transform_noisy = transforms.Compose(
@@ -136,16 +137,16 @@ dataloader_test = DataLoader(
 
 
 """ Teacher model preparation """
-teacher_model = make_model(
-    args.teacher_layer,
-    width=args.teacher_width,
-    prob_0_L=(1.0, 1.0),
-    dropout_prob=0.0,
-    num_classes=10,
-).to(device)
-
 if args.teacher is None:
     print("Creating and begining to train the teacher model with resnet {}".format(args.teacher_layer))
+    
+    teacher_model = make_model(
+        args.teacher_layer,
+        width=args.teacher_width,
+        prob_0_L=(1.0, 1.0),
+        dropout_prob=0.0,
+        num_classes=10,
+    ).to(device)
     teacher_model.train()
 
     dataset_train_teacher = DatasetApplyTransform(
@@ -197,6 +198,24 @@ if args.teacher is None:
     teacher_model.load_state_dict(torch.load(teacher_save_path))
 else:
     print("Loading teacher model from {}".format(args.teacher))
+    if args.teacher.find("model/student_resnet") != -1:
+        # from another noisy student: add model noise
+        teacher_model = make_model(
+            args.teacher_layer,
+            width=args.teacher_width,
+            prob_0_L=(args.stochastic_depth_0_prob, args.stochastic_depth_L_prob),
+            dropout_prob=args.dropout_prob,
+            num_classes=10,
+        ).to(device)
+    else:
+        # from pure teacher model: no model noise
+        teacher_model = make_model(
+            args.teacher_layer,
+            width=args.teacher_width,
+            prob_0_L=(1.0, 1.0),
+            dropout_prob=0.0,
+            num_classes=10,
+        ).to(device)
     teacher_model.load_state_dict(torch.load(args.teacher))
 
 test_loss, test_acc = test_model(teacher_model, dataloader_test, device, onehot=False)
@@ -219,17 +238,30 @@ while student_layer <= args.student_layer:
         transform_test=transforms.Compose([transforms.ToPILImage(), transform_test]),
         transform_noisy=transform_noisy,
         device=device,
-        label_type=args.label_type,
-        label_smoothing_epsilon=args.label_smoothing_epsilon,
-        confidence_threshold=args.confidence_threshold,
-        min_images_per_class=args.min_images_per_class,
+        args=args,
     )
-    print("Generated {} datasets with the confidence threshold {}"
-        .format(len(dataset_train_student), args.confidence_threshold))
+    print("Generated {} datasets with the confidence threshold {} (minimum {} images per class)"
+        .format(len(dataset_train_student), args.confidence_threshold, args.min_images_per_class))
 
-    ys = np.eye(10)[dataset_train_student.label.argmax(axis=1)].sum(axis=0)
+    ys_before = dataset_train_student.num_images_per_label()
     for i in range(len(labels)):
-        print("> Number of image {}: {}".format(labels[i].ljust(10), int(ys[i])))
+        print("> Number of image {}: {}".format(labels[i].ljust(10), int(ys_before[i])))
+    
+    print("Balancing the data...")
+    dataset_train_student.balance_data(args.min_images_per_class, args.max_gap_num_images_between_classes)
+    ys_after = dataset_train_student.num_images_per_label()
+    for i in range(len(labels)):
+        print("> Number of image {}: {}".format(labels[i].ljust(10), int(ys_after[i])))
+        
+    dataset_info = {
+        'generated by teacher': ys_before,
+        'data balanced': ys_after
+    }
+
+    if not os.path.exists(os.path.join(log_path, "log")):
+        os.mkdir(os.path.join(log_path, "log"))
+    with open(os.path.join(log_path, "log/dataset_student_resnet{}.json".format(student_layer)), "wt") as f:
+        json.dump(dataset_info, f, indent=4)
 
     del teacher_model
 

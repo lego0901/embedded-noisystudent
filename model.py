@@ -20,20 +20,6 @@ def conv3x3(in_planes, out_planes, stride=1):
     )
 
 
-class Downsample(nn.Module):
-    """shrink width/height with stride and add zero padding to new channels"""
-
-    def __init__(self, in_channels, out_channels, stride):
-        super(Downsample, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        return x
-
-
 class IdentityPadding(nn.Module):
     def __init__(self, in_channels, out_channels, stride):
         super(IdentityPadding, self).__init__()
@@ -134,18 +120,14 @@ class StoDepth_ResNet(nn.Module):
         self.drop = nn.Dropout(p=dropout_prob)
         self.fc = nn.Linear(64 * width, num_classes)
 
-        '''
         # weight initialization
         for module in self.modules():
             if isinstance(module, nn.Conv2d):
                 n = module.kernel_size[0] * module.kernel_size[1] * module.out_channels
-            module.weight.data.normal_(0, torch.sqrt(torch.Tensor([2.0 /
-            n])).item())
-        '''
+                module.weight.data.normal_(0, torch.sqrt(torch.Tensor([2.0 / n])).item())
 
     def _make_layers(self, planes, stride):
         if stride == 2:
-            #down_sample = Downsample(self.inplanes, planes, stride)
             down_sample = IdentityPadding(self.inplanes, planes, stride)
         else:
             down_sample = None
