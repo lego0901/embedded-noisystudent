@@ -310,7 +310,7 @@ class DatasetFromTeacher(torch.utils.data.Dataset):
         elif self.args.label_type == "smooth":
             mxindex = probs.argmax(axis=1)
             onehot_labels = np.full((n, self.num_classes), self.smoothing_small)
-            onehot_labels[np.arange(n), mxindex] = self.smoothing_big
+            onehot_labels[np.arange(n), mxindex] = self.smoothing_big * 0.99
 
         for image, onehot_label in zip(images, onehot_labels):
             y = onehot_label.argmax().item()
