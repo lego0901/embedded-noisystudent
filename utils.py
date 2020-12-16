@@ -15,6 +15,8 @@ import torchvision
 import torchvision.transforms as transforms
 import torch.utils.data
 
+from torch.utils.data import Dataset, DataLoader
+
 from model import StoDepth_ResNet
 
 
@@ -147,69 +149,6 @@ def train_model(
                 index=range(1, epoch + 1)
             )
             df.to_csv(log_path, encoding="UTF-8")
-
-
-def test_model(model, dataloader_test, device, onehot=False):
-    if onehot:
-        criterion = lambda output, target: torch.mean(
-            torch.sum(-target * F.log_softmax(output, dim=1), dim=1)
-        )
-        to_target = lambda target: target.argmax(dim=1)
-    else:
-        criterion = nn.CrossEntropyLoss()
-        to_target = lambda target: target
-
-    model.eval()
-
-    test_loss = 0.0
-    test_total = 0
-    test_correct = 0
-
-    for batch in dataloader_test:
-        data, target = batch[0].to(device), batch[1].to(device)
-        model.training = False
-
-        with torch.no_grad():
-            output = model(data)
-            loss = criterion(output, target)
-
-        test_loss += loss.item() * target.size(0)
-        _, predicted = output.max(1)
-        test_total += target.size(0)
-        test_correct += predicted.eq(to_target(target)).sum().item()
-
-    test_loss /= test_total
-    test_acc = test_correct / test_total
-
-    return test_loss, test_acc
-
-
-class DatasetApplyTransform(torch.utils.data.Dataset):
-    def __init__(
-        self,
-        dataset_labeled,
-        transform,
-        num_classes=10,
-    ):
-        super(DatasetApplyTransform, self).__init__()
-        self.transform= transform
-        self.data, self.label = [], []
-        self.num_classes = num_classes
-
-        for image, y in dataset_labeled:
-            self.data.append(np.array(transforms.ToPILImage()(image)))
-            self.label.append(y)
-
-        self.data, self.label = np.array(self.data), np.array(self.label)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        return (
-            self.transform(self.data[index]),
-            self.label[index],
-        )
 
 
 class DatasetFromTeacher(torch.utils.data.Dataset):
@@ -392,3 +331,79 @@ def mixup_batch(data, label, alpha=1.0):
     mixup_label = lam_label * label + (1 - lam_label) * label[index, :]
 
     return mixup_data, mixup_label
+
+
+def test_model(model, dataloader_test, device, onehot=False):
+    if onehot:
+        criterion = lambda output, target: torch.mean(
+            torch.sum(-target * F.log_softmax(output, dim=1), dim=1)
+        )
+        to_target = lambda target: target.argmax(dim=1)
+    else:
+        criterion = nn.CrossEntropyLoss()
+        to_target = lambda target: target
+
+    model.eval()
+
+    test_loss = 0.0
+    test_total = 0
+    test_correct = 0
+
+    for batch in dataloader_test:
+        data, target = batch[0].to(device), batch[1].to(device)
+
+        with torch.no_grad():
+            output = model(data)
+            loss = criterion(output, target)
+
+        test_loss += loss.item() * target.size(0)
+        _, predicted = output.max(1)
+        test_total += target.size(0)
+        test_correct += predicted.eq(to_target(target)).sum().item()
+
+    test_loss /= test_total
+    test_acc = test_correct / test_total
+
+    return test_loss, test_acc
+
+
+def predict_model(model, dataloader_test, device):
+    model.eval()
+    predicts = []
+
+    for batch in dataloader_test:
+        data, target = batch[0].to(device), batch[1].to(device)
+        output = model(data)
+        _, predicted = output.max(1)
+        predicts.append(predicted)
+
+    predicts = torch.cat(predicts).cpu()
+    return np.array(predicts).astype(np.long)
+
+
+class DatasetApplyTransform(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        dataset_labeled,
+        transform,
+        num_classes=10,
+    ):
+        super(DatasetApplyTransform, self).__init__()
+        self.transform= transform
+        self.data, self.label = [], []
+        self.num_classes = num_classes
+
+        for image, y in dataset_labeled:
+            self.data.append(np.array(transforms.ToPILImage()(image)))
+            self.label.append(y)
+
+        self.data, self.label = np.array(self.data), np.array(self.label)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return (
+            self.transform(self.data[index]),
+            self.label[index],
+        )
