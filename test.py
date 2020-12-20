@@ -30,7 +30,6 @@ parser = argparse.ArgumentParser(description="CIFAR10 noisy student ST model tes
 parser.add_argument("--batch_size_test", default=512, help="batch size for testing", type=int)
 parser.add_argument("--batch_size_fgsm", default=256, help="batch size for testing", type=int)
 parser.add_argument("--num_workers", default=4, help="number of cpu workers", type=int)
-#parser.add_argument("--model", default=None, help="load pretrained model")
 parser.add_argument("--test_path", default="./test", help="test file path")
 parser.add_argument("--analysis_path", default="./analysis", help="test file path")
 parser.add_argument("--model_width", default=1, help="resnet width of model", type=int)
