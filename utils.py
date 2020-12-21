@@ -20,6 +20,10 @@ from torch.utils.data import Dataset, DataLoader
 from model import StoDepth_ResNet
 
 
+############################################################
+####################### For training #######################
+############################################################
+
 def make_model(num_layers=20, width=1, prob_0_L=(1, 0.8), dropout_prob=0.5, num_classes=10):
     return StoDepth_ResNet(
         num_layers,
@@ -332,6 +336,11 @@ def mixup_batch(data, label, alpha=1.0):
 
     return mixup_data, mixup_label
 
+
+
+############################################################
+#################### For test, analysis ####################
+############################################################
 
 def test_model(model, dataloader_test, device, onehot=False):
     if onehot:
