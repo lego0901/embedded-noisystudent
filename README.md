@@ -15,6 +15,12 @@ I used RandAugment of magnitude 27, stochastic depth decays to 0.8, and dropout 
 
 ### How to Run
 
+I recommend you to install the same python runtime environment to me.
+
+```bash
+pip install -r requirements.txt
+```
+
 You can clone and run training scripts via:
 
 ```bash
