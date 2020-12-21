@@ -46,7 +46,7 @@ I used pseudo label with hard, soft, and label smoothing while training. Also, I
 </p>
 
 
-You can download all training models and analysis results from the links. The results for ablation studies are written in the [report](https://github.com/lego0901/embedded-noisystudent/blob/main/document/noisy_student_cifar_10_kor.pdf).
+You can download all [training models](https://drive.google.com/file/d/16E8sqJv-k6hgZjzSSxlIy_WyJjZIIU55/view?usp=sharing) and [analysis results](https://drive.google.com/file/d/1o4iAi4Cx75iBMAjK3pfPL276fTt8sJyz/view?usp=sharing) from the links. The results for ablation studies are written in the [report](https://github.com/lego0901/embedded-noisystudent/blob/main/document/noisy_student_cifar_10_kor.pdf).
 
 ### References
 
@@ -61,3 +61,12 @@ You can download all training models and analysis results from the links. The re
 9. Ian J. Goodfellow, Jonathon Shlens, and Christian Szegedy. Explaining and harnessing adversarial examples, 2015.
 10. Morgane Goibert and Elvis Dohmatob. Adversarial robustness via label-smoothing, 2019.
 11. Dan Hendrycks and Thomas G. Dietterich. Benchmarking neural network robustness to common corruptions and surface variations, 2019.
+
+#### Code References & Data
+
+- RandAugment: [ildoonet/pytorch-randaugment](https://github.com/ildoonet/pytorch-randaugment)
+- Stochastic Depth on ResNet: [shamangary/Pytorch-Stochastic-Depth-Resnet](https://github.com/shamangary/Pytorch-Stochastic-Depth-Resnet)
+- Mixup: [facebookresearch/mixup-cifar-10](https://github.com/facebookresearch/mixup-cifar10)
+- CIFAR-10-C and CIFAR-10-P: [hendrycks/robustness](https://github.com/hendrycks/robustness)
+- Confusion Matrix: [How to plot wholesome confusion matrix?](https://medium.com/@djin31/how-to-plot-wholesome-confusion-matrix-40134fd402a8)
+
