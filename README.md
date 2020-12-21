@@ -37,6 +37,8 @@ bash ./run_train.sh
 bash ./run_test.sh
 ```
 
+The `run_train.sh` will create a directory named `test`, which contains models and training information(loss and accuracy). The `run_test.sh` will create a directory named `analysis`, which contains `logs.csv` that has Top-1 Acc., FGSM, ECE, CE, FR, ... on each model inside the `test` directory.
+
 Please note that CIFAR-10-C(2.9 GB) and CIFAR-10-P(18.3 GB) are quite heavy. If you don't want to analyze these results, please modify inside of `run_tesh.sh` with
 
 ```bash
